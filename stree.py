@@ -13,17 +13,9 @@ try:
 except ImportError:
     pathspec = None
 
-# ------------------------------------------------------------------------------
-# ---------------------------  CONFIGURATION  -----------------------------------
-# ------------------------------------------------------------------------------
-
 LANGUAGE_SERVER_COMMAND = ["jedi-language-server"]  # Adjust if needed
-
-# If you only want LSP symbols for certain extensions, set this list. Example:
 ALLOWED_EXTENSIONS = [".py"]  
-# ALLOWED_EXTENSIONS = None   # Attempt all files
 
-# Mapping from LSP SymbolKind -> short prefix
 SYMBOL_KIND_MAP = {
     1: "f:",
     2: "d:",
@@ -53,10 +45,6 @@ SYMBOL_KIND_MAP = {
     26: "typ:",
 }
 
-# ------------------------------------------------------------------------------
-# ---------------------------  FILESYSTEM HELPERS  ------------------------------
-# ------------------------------------------------------------------------------
-
 def get_unix_permissions(mode: int) -> str:
     return stat.filemode(mode)
 
@@ -65,10 +53,6 @@ def get_owner_name(uid: int) -> str:
         return pwd.getpwuid(uid).pw_name
     except KeyError:
         return str(uid)
-
-# ------------------------------------------------------------------------------
-# ---------------------------  GITIGNORE SUPPORT  -------------------------------
-# ------------------------------------------------------------------------------
 
 def load_gitignore_spec(start_directory: str):
     if pathspec is None:
@@ -82,30 +66,14 @@ def load_gitignore_spec(start_directory: str):
 
 def is_ignored(spec, root_dir, full_path, also_ignore_hidden=False):
     base_name = os.path.basename(full_path)
-
-    # Skip hidden if requested
     if also_ignore_hidden and base_name.startswith("."):
         return True
-
     if spec is None:
         return False
-
     rel_path = os.path.relpath(full_path, start=root_dir).replace("\\", "/")
     return spec.match_file(rel_path)
 
-# ------------------------------------------------------------------------------
-# ---------------------------  TREE DATA STRUCTURES  ----------------------------
-# ------------------------------------------------------------------------------
-
 class TreeNode:
-    """
-    Each node holds:
-      - name
-      - path (absolute path)
-      - node_type: 'dir'|'file'|'symbol'
-      - optional LSP symbol_kind (e.g., "fn:", "cl:", etc.)
-      - children
-    """
     def __init__(
         self,
         name: str,
@@ -117,7 +85,7 @@ class TreeNode:
         symbol_kind: str = "",
     ):
         self.name = name
-        self.path = path  # absolute path
+        self.path = path
         self.node_type = node_type
         self.permissions = permissions
         self.owner = owner
@@ -128,7 +96,7 @@ class TreeNode:
     def add_child(self, child: "TreeNode"):
         self.children.append(child)
 
-def print_merged_tree(node: TreeNode, indent: int = 0):
+def print_merged_tree(node: "TreeNode", indent: int = 0):
     indent_str = "  " * indent
     if node.node_type == "dir":
         if node.permissions or node.owner or node.size:
@@ -147,10 +115,6 @@ def print_merged_tree(node: TreeNode, indent: int = 0):
     for c in node.children:
         print_merged_tree(c, indent + 1)
 
-# ------------------------------------------------------------------------------
-# ---------------------------  BUILD FILESYSTEM TREE  ---------------------------
-# ------------------------------------------------------------------------------
-
 def build_filesystem_tree(
     start_path: str,
     with_extras=False,
@@ -158,13 +122,8 @@ def build_filesystem_tree(
     root_for_ignores=None,
     ignore_hidden=False,
 ) -> TreeNode:
-    """
-    Recursively build a TreeNode from start_path, storing absolute paths
-    and skipping .gitignore or hidden files if requested.
-    """
     if is_ignored(gitignore_spec, root_for_ignores, start_path, also_ignore_hidden=ignore_hidden):
         return None
-
     try:
         st = os.stat(start_path)
     except FileNotFoundError:
@@ -205,10 +164,6 @@ def build_filesystem_tree(
                 root_node.add_child(child_node)
 
     return root_node
-
-# ------------------------------------------------------------------------------
-# ---------------------------  LSP COMMUNICATION  -------------------------------
-# ------------------------------------------------------------------------------
 
 _request_id = 0
 
@@ -265,7 +220,7 @@ def start_language_server():
         LANGUAGE_SERVER_COMMAND,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=sys.stderr,  # or subprocess.PIPE for separate error capture
+        stderr=sys.stderr,
         text=True,
         bufsize=0,
     )
@@ -273,24 +228,13 @@ def start_language_server():
 def kind_map(symbol_kind: int) -> str:
     return SYMBOL_KIND_MAP.get(symbol_kind, "??:")
 
-# ------------------------------------------------------------------------------
-# ---------------------  SYMBOL PARSING (DocSym / SymInfo)  ---------------------
-# ------------------------------------------------------------------------------
-
 class SymbolNode:
-    """
-    We store the symbol name, short prefix (kind), and any children.
-    If it's a function, we try to incorporate the signature from 'detail'.
-    """
     def __init__(self, name: str, kind: str):
         self.name = name
         self.kind = kind
         self.children = []
 
 def parse_document_symbols(doc_syms: list) -> list[SymbolNode]:
-    """
-    doc_syms: list of DocumentSymbol objects, each might have "children", "detail".
-    """
     def from_doc_symbol(ds):
         k = kind_map(ds["kind"])
         nm = ds["name"]
@@ -304,10 +248,6 @@ def parse_document_symbols(doc_syms: list) -> list[SymbolNode]:
     return [from_doc_symbol(d) for d in doc_syms]
 
 def parse_symbol_information(sym_info: list) -> list[SymbolNode]:
-    """
-    sym_info: list of SymbolInformation (flat). No 'detail' or 'children'.
-    We'll lose function signatures, but we can still show them at top-level.
-    """
     out = []
     for si in sym_info:
         k = kind_map(si["kind"])
@@ -315,15 +255,7 @@ def parse_symbol_information(sym_info: list) -> list[SymbolNode]:
         out.append(SymbolNode(nm, k))
     return out
 
-# ------------------------------------------------------------------------------
-# --------------------  DIDOPEN + DOCUMENTSYMBOL PER FILE  ---------------------
-# ------------------------------------------------------------------------------
-
 def did_open_file(lsp_proc, file_path: str, language_id="python"):
-    """
-    Send 'textDocument/didOpen' so the server will parse the file and return
-    nested DocumentSymbol with detail (if it supports that).
-    """
     uri = f"file://{os.path.abspath(file_path)}"
     text = ""
     try:
@@ -341,15 +273,9 @@ def did_open_file(lsp_proc, file_path: str, language_id="python"):
         }
     }
     send_notification(lsp_proc, "textDocument/didOpen", params)
-    # let the server parse
     time.sleep(0.2)
 
 def collect_document_symbols_for_file(lsp_proc, file_path: str) -> list[SymbolNode]:
-    """
-    1) didOpen -> server can parse the file
-    2) textDocument/documentSymbol -> hopefully returns DocumentSymbol[] with children + detail
-       If we get SymbolInformation[], we parse that flatly.
-    """
     abs_path = os.path.abspath(file_path)
     did_open_file(lsp_proc, abs_path, language_id="python")
 
@@ -365,42 +291,10 @@ def collect_document_symbols_for_file(lsp_proc, file_path: str) -> list[SymbolNo
             result = msg.get("result", [])
             if not isinstance(result, list) or not result:
                 return []
-            # Distinguish DocumentSymbol from SymbolInformation
             if "children" in result[0]:  # DocumentSymbol
                 return parse_document_symbols(result)
             else:                        # SymbolInformation
                 return parse_symbol_information(result)
-
-# ------------------------------------------------------------------------------
-# -----------------  ATTACH LSP SYMBOLS INTO FILESYSTEM TREE  ------------------
-# ------------------------------------------------------------------------------
-
-def attach_symbols_recursive(fs_node: TreeNode, lsp_proc) -> None:
-    """
-    If fs_node.node_type=='file', gather symbols, then create nested symbol TreeNodes.
-    If 'dir', recurse into children.
-    """
-    if fs_node.node_type == "file":
-        if ALLOWED_EXTENSIONS is not None:
-            _, ext = os.path.splitext(fs_node.path)
-            if ext.lower() not in ALLOWED_EXTENSIONS:
-                return
-
-        if os.path.isfile(fs_node.path):
-            syms = collect_document_symbols_for_file(lsp_proc, fs_node.path)
-            for s in syms:
-                sym_child = TreeNode(
-                    name=s.name,
-                    path=fs_node.path,  # same file
-                    node_type="symbol",
-                    symbol_kind=s.kind
-                )
-                attach_symbol_children(sym_child, s.children)
-                fs_node.add_child(sym_child)
-
-    elif fs_node.node_type == "dir":
-        for child in fs_node.children:
-            attach_symbols_recursive(child, lsp_proc)
 
 def attach_symbol_children(parent_node: TreeNode, symbol_children: list[SymbolNode]) -> None:
     for s in symbol_children:
@@ -413,24 +307,30 @@ def attach_symbol_children(parent_node: TreeNode, symbol_children: list[SymbolNo
         parent_node.add_child(sym_node)
         attach_symbol_children(sym_node, s.children)
 
-# ------------------------------------------------------------------------------
-# ----------------------------------- MAIN -------------------------------------
-# ------------------------------------------------------------------------------
+def attach_symbols_recursive(fs_node: TreeNode, lsp_proc) -> None:
+    if fs_node.node_type == "file":
+        if ALLOWED_EXTENSIONS is not None:
+            _, ext = os.path.splitext(fs_node.path)
+            if ext.lower() not in ALLOWED_EXTENSIONS:
+                return
+        if os.path.isfile(fs_node.path):
+            syms = collect_document_symbols_for_file(lsp_proc, fs_node.path)
+            for s in syms:
+                sym_child = TreeNode(
+                    name=s.name,
+                    path=fs_node.path,
+                    node_type="symbol",
+                    symbol_kind=s.kind
+                )
+                attach_symbol_children(sym_child, s.children)
+                fs_node.add_child(sym_child)
+    elif fs_node.node_type == "dir":
+        for child in fs_node.children:
+            attach_symbols_recursive(child, lsp_proc)
 
 def main():
-    """
-    Usage:
-      python merged_docSymbol_tree.py <start_directory> [--extras] [--gitignore]
-
-    Steps:
-      1) Possibly load .gitignore if --gitignore is used (also skip hidden).
-      2) Build the directory tree with absolute paths.
-      3) Start LSP, initialize with hierarchicalDocumentSymbolSupport = True
-      4) For each file, didOpen + documentSymbol
-      5) Print nested symbols (and function signatures in detail if provided)
-    """
     if len(sys.argv) < 2:
-        print("Usage: python merged_docSymbol_tree.py <start_directory> [--extras] [--gitignore]")
+        print("Usage: python stree.py <start_directory> [--extras] [--gitignore]")
         sys.exit(1)
 
     start_path = sys.argv[1]
@@ -448,7 +348,6 @@ def main():
         else:
             print("[Warning] `--gitignore` used but pathspec not installed. Will only skip hidden files.")
 
-    # 1) Build FS tree
     fs_root = build_filesystem_tree(
         start_abs,
         with_extras=with_extras,
@@ -460,15 +359,12 @@ def main():
         print(f"No files found under '{start_abs}'. Exiting.")
         return
 
-    # 2) Start LSP
     lsp_proc = start_language_server()
 
-    # 2a) Send "initialize" with hierarchicalDocumentSymbolSupport = True
     init_params = {
         "processId": os.getpid(),
         "rootUri": f"file://{start_abs}",
         "capabilities": {
-            # The key addition to encourage servers to return DocumentSymbols with children & detail
             "textDocument": {
                 "documentSymbol": {
                     "hierarchicalDocumentSymbolSupport": True
@@ -487,17 +383,13 @@ def main():
             lsp_proc.wait()
             return
         if "id" in msg and msg["id"] == init_id:
-            # 2b) "initialized" notification
             send_notification(lsp_proc, "initialized", {})
             break
 
-    # 3) Attach symbols (recursively)
     attach_symbols_recursive(fs_root, lsp_proc)
 
-    # 4) Print
     print_merged_tree(fs_root)
 
-    # 5) Shutdown
     shutdown_id = send_request(lsp_proc, "shutdown")
     while True:
         msg = read_message(lsp_proc)
@@ -509,7 +401,6 @@ def main():
     send_notification(lsp_proc, "exit")
     lsp_proc.terminate()
     lsp_proc.wait()
-
 
 if __name__ == "__main__":
     main()

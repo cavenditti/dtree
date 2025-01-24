@@ -8,3 +8,8 @@ dependencies = [
     "jedi-language-server>=0.43.1",
     "pathspec>=0.12.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+]
