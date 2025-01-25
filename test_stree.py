@@ -117,7 +117,7 @@ def test_attach_symbols_recursive(mock_collect, mock_fs):
     fake_lsp_proc = MagicMock()
 
     # Fake return from collect_document_symbols_for_file
-    sym_mock = [SymbolNode("func1", "fn:"), SymbolNode("ClassA", "cl:")]
+    sym_mock = [SymbolNode("func1", "fn:"), SymbolNode("ClassA", "cls:")]
     mock_collect.return_value = sym_mock
 
     root_path = mock_fs / "folder"
@@ -157,7 +157,7 @@ def test_parse_document_symbols():
         result[0].name == "MyClass"
     )  # For a class, we don't usually append detail to name
     # The kind_map(5) => "cl:" by default
-    assert result[0].kind == "cl:"
+    assert result[0].kind == "cls:"
     assert len(result[0].children) == 1
     child = result[0].children[0]
     assert child.name == "my_method (self, arg)"
