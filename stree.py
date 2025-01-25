@@ -8,45 +8,46 @@ import json
 import subprocess
 import time
 
-try:
-    import pathspec  # pip install pathspec if you want .gitignore support
-except ImportError:
-    pathspec = None
+import pathspec
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
 
 LANGUAGE_SERVER_COMMAND = ["jedi-language-server"]  # Adjust if needed
-ALLOWED_EXTENSIONS = [".py"]  
+ALLOWED_EXTENSIONS = [".py"]
 
 SYMBOL_KIND_MAP = {
-    1: "f:",
-    2: "d:",
-    3: "d:",
-    4: "d:",
-    5: "cl:",
-    6: "fn:",
-    7: "var:",
-    8: "var:",
-    9: "fn:",
-    10: "enum:",
-    11: "int:",
-    12: "fn:",
-    13: "var:",
-    14: "var:",
-    15: "str:",
-    16: "num:",
-    17: "bool:",
-    18: "arr:",
-    19: "obj:",
-    20: "key:",
-    21: "null:",
-    22: "mem:",
-    23: "str:",
-    24: "event:",
-    25: "oper:",
-    26: "typ:",
+    1: "f:",  # File
+    2: "mod:",  # Module
+    3: "mod:",  # Namespace
+    4: "mod:",  # Package
+    5: "cls:",  # Class
+    6: "fn:",  # Method
+    7: "var:",  # Property
+    8: "var:",  # Field
+    9: "fn:",  # Constructor
+    10: "enum:",  # Enum
+    11: "int:",  # Interface
+    12: "fn:",  # Function
+    13: "var:",  # Variable
+    14: "var:",  # Constant
+    15: "str:",  # String
+    16: "num:",  # Number
+    17: "bool:",  # Boolean
+    18: "arr:",  # Array
+    19: "obj:",  # Object
+    20: "key:",  # Key
+    21: "null:",  # Null
+    22: "emem:",  # EnumMember
+    23: "str:",  # Struct
+    24: "event:",  # Event
+    25: "oper:",  # Operator
+    26: "typ:",  # TypeParameter
 }
+
 
 def get_unix_permissions(mode: int) -> str:
     return stat.filemode(mode)
+
 
 def get_owner_name(uid: int) -> str:
     try:
@@ -54,15 +55,15 @@ def get_owner_name(uid: int) -> str:
     except KeyError:
         return str(uid)
 
+
 def load_gitignore_spec(start_directory: str):
-    if pathspec is None:
-        return None
     gitignore_path = os.path.join(start_directory, ".gitignore")
     if not os.path.isfile(gitignore_path):
         return None
     with open(gitignore_path, "r", encoding="utf-8") as f:
         lines = f.read().splitlines()
     return pathspec.PathSpec.from_lines("gitwildmatch", lines)
+
 
 def is_ignored(spec, root_dir, full_path, also_ignore_hidden=False):
     base_name = os.path.basename(full_path)
@@ -73,6 +74,7 @@ def is_ignored(spec, root_dir, full_path, also_ignore_hidden=False):
     rel_path = os.path.relpath(full_path, start=root_dir).replace("\\", "/")
     return spec.match_file(rel_path)
 
+
 class TreeNode:
     def __init__(
         self,
@@ -81,7 +83,7 @@ class TreeNode:
         node_type: str,
         permissions: str = "",
         owner: str = "",
-        size: int = None,
+        size: int | None = None,
         symbol_kind: str = "",
     ):
         self.name = name
@@ -96,16 +98,21 @@ class TreeNode:
     def add_child(self, child: "TreeNode"):
         self.children.append(child)
 
+
 def print_merged_tree(node: "TreeNode", indent: int = 0):
     indent_str = "  " * indent
     if node.node_type == "dir":
         if node.permissions or node.owner or node.size:
-            print(f"{indent_str}d: {node.name} [{node.permissions} | {node.owner} | {node.size}]")
+            print(
+                f"{indent_str}d: {node.name} [{node.permissions} | {node.owner} | {node.size}]"
+            )
         else:
             print(f"{indent_str}d: {node.name}")
     elif node.node_type == "file":
         if node.permissions or node.owner or node.size:
-            print(f"{indent_str}f: {node.name} [{node.permissions} | {node.owner} | {node.size}]")
+            print(
+                f"{indent_str}f: {node.name} [{node.permissions} | {node.owner} | {node.size}]"
+            )
         else:
             print(f"{indent_str}f: {node.name}")
     else:
@@ -115,14 +122,17 @@ def print_merged_tree(node: "TreeNode", indent: int = 0):
     for c in node.children:
         print_merged_tree(c, indent + 1)
 
+
 def build_filesystem_tree(
     start_path: str,
     with_extras=False,
     gitignore_spec=None,
     root_for_ignores=None,
     ignore_hidden=False,
-) -> TreeNode:
-    if is_ignored(gitignore_spec, root_for_ignores, start_path, also_ignore_hidden=ignore_hidden):
+) -> TreeNode | None:
+    if is_ignored(
+        gitignore_spec, root_for_ignores, start_path, also_ignore_hidden=ignore_hidden
+    ):
         return None
     try:
         st = os.stat(start_path)
@@ -165,7 +175,9 @@ def build_filesystem_tree(
 
     return root_node
 
+
 _request_id = 0
+
 
 def send_request(process, method, params=None):
     global _request_id
@@ -184,6 +196,7 @@ def send_request(process, method, params=None):
     process.stdin.flush()
     return req_id
 
+
 def send_notification(process, method, params=None):
     body = {
         "jsonrpc": "2.0",
@@ -195,6 +208,7 @@ def send_notification(process, method, params=None):
     message = f"Content-Length: {len(text)}\r\n\r\n{text}"
     process.stdin.write(message)
     process.stdin.flush()
+
 
 def read_message(process):
     headers = {}
@@ -215,7 +229,8 @@ def read_message(process):
     body = process.stdout.read(content_length)
     return json.loads(body) if body else None
 
-def start_language_server():
+
+def start_language_server() -> subprocess.Popen:
     return subprocess.Popen(
         LANGUAGE_SERVER_COMMAND,
         stdin=subprocess.PIPE,
@@ -225,14 +240,17 @@ def start_language_server():
         bufsize=0,
     )
 
+
 def kind_map(symbol_kind: int) -> str:
     return SYMBOL_KIND_MAP.get(symbol_kind, "??:")
+
 
 class SymbolNode:
     def __init__(self, name: str, kind: str):
         self.name = name
         self.kind = kind
         self.children = []
+
 
 def parse_document_symbols(doc_syms: list) -> list[SymbolNode]:
     def from_doc_symbol(ds):
@@ -245,7 +263,9 @@ def parse_document_symbols(doc_syms: list) -> list[SymbolNode]:
         for c in ds.get("children", []):
             node.children.append(from_doc_symbol(c))
         return node
+
     return [from_doc_symbol(d) for d in doc_syms]
+
 
 def parse_symbol_information(sym_info: list) -> list[SymbolNode]:
     out = []
@@ -254,6 +274,7 @@ def parse_symbol_information(sym_info: list) -> list[SymbolNode]:
         nm = si["name"]
         out.append(SymbolNode(nm, k))
     return out
+
 
 def did_open_file(lsp_proc, file_path: str, language_id="python"):
     uri = f"file://{os.path.abspath(file_path)}"
@@ -269,15 +290,16 @@ def did_open_file(lsp_proc, file_path: str, language_id="python"):
             "uri": uri,
             "languageId": language_id,
             "version": 1,
-            "text": text
+            "text": text,
         }
     }
     send_notification(lsp_proc, "textDocument/didOpen", params)
     time.sleep(0.2)
 
+
 def collect_document_symbols_for_file(lsp_proc, file_path: str) -> list[SymbolNode]:
     abs_path = os.path.abspath(file_path)
-    did_open_file(lsp_proc, abs_path, language_id="python")
+    # did_open_file(lsp_proc, abs_path, language_id="python")
 
     file_uri = f"file://{abs_path}"
     params = {"textDocument": {"uri": file_uri}}
@@ -293,19 +315,20 @@ def collect_document_symbols_for_file(lsp_proc, file_path: str) -> list[SymbolNo
                 return []
             if "children" in result[0]:  # DocumentSymbol
                 return parse_document_symbols(result)
-            else:                        # SymbolInformation
+            else:  # SymbolInformation
                 return parse_symbol_information(result)
 
-def attach_symbol_children(parent_node: TreeNode, symbol_children: list[SymbolNode]) -> None:
+
+def attach_symbol_children(
+    parent_node: TreeNode, symbol_children: list[SymbolNode]
+) -> None:
     for s in symbol_children:
         sym_node = TreeNode(
-            name=s.name,
-            path=parent_node.path,
-            node_type="symbol",
-            symbol_kind=s.kind
+            name=s.name, path=parent_node.path, node_type="symbol", symbol_kind=s.kind
         )
         parent_node.add_child(sym_node)
         attach_symbol_children(sym_node, s.children)
+
 
 def attach_symbols_recursive(fs_node: TreeNode, lsp_proc) -> None:
     if fs_node.node_type == "file":
@@ -320,7 +343,7 @@ def attach_symbols_recursive(fs_node: TreeNode, lsp_proc) -> None:
                     name=s.name,
                     path=fs_node.path,
                     node_type="symbol",
-                    symbol_kind=s.kind
+                    symbol_kind=s.kind,
                 )
                 attach_symbol_children(sym_child, s.children)
                 fs_node.add_child(sym_child)
@@ -328,47 +351,55 @@ def attach_symbols_recursive(fs_node: TreeNode, lsp_proc) -> None:
         for child in fs_node.children:
             attach_symbols_recursive(child, lsp_proc)
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python stree.py <start_directory> [--extras] [--gitignore]")
-        sys.exit(1)
 
-    start_path = sys.argv[1]
-    with_extras = "--extras" in sys.argv
-    use_gitignore = "--gitignore" in sys.argv
-
-    start_abs = os.path.abspath(start_path)
+def stree(
+    path: str, lsp_proc: subprocess.Popen, extras: bool, use_gitignore: bool
+) -> str:
+    output_lines = []
+    path = os.path.abspath(path)
 
     gitignore_spec = None
     ignore_hidden = False
     if use_gitignore:
         ignore_hidden = True
-        if pathspec is not None:
-            gitignore_spec = load_gitignore_spec(start_abs)
-        else:
-            print("[Warning] `--gitignore` used but pathspec not installed. Will only skip hidden files.")
+        gitignore_spec = load_gitignore_spec(path)
 
     fs_root = build_filesystem_tree(
-        start_abs,
-        with_extras=with_extras,
+        path,
+        with_extras=extras,
         gitignore_spec=gitignore_spec,
-        root_for_ignores=start_abs,
-        ignore_hidden=ignore_hidden
+        root_for_ignores=path,
+        ignore_hidden=ignore_hidden,
     )
     if not fs_root:
-        print(f"No files found under '{start_abs}'. Exiting.")
-        return
+        output_lines.append(f"No files found under '{path}'. Exiting.")
+        return "\n".join(output_lines)
+
+    original_stdout = sys.stdout
+    try:
+        from io import StringIO
+
+        buffer = StringIO()
+        sys.stdout = buffer
+        attach_symbols_recursive(fs_root, lsp_proc)
+        print_merged_tree(fs_root)
+        output_lines.append(buffer.getvalue().rstrip())
+    finally:
+        sys.stdout = original_stdout
+
+    return "\n".join(output_lines)
+
+
+def lsp_setup(start_path: str) -> subprocess.Popen:
+    start_path = os.path.abspath(__file__)
 
     lsp_proc = start_language_server()
-
     init_params = {
         "processId": os.getpid(),
-        "rootUri": f"file://{start_abs}",
+        "rootUri": f"file://{start_path}",
         "capabilities": {
             "textDocument": {
-                "documentSymbol": {
-                    "hierarchicalDocumentSymbolSupport": True
-                }
+                "documentSymbol": {"hierarchicalDocumentSymbolSupport": True}
             }
         },
         "workspaceFolders": None,
@@ -381,15 +412,15 @@ def main():
             print("No response from LSP. Exiting.")
             lsp_proc.terminate()
             lsp_proc.wait()
-            return
+            exit(-1)
         if "id" in msg and msg["id"] == init_id:
             send_notification(lsp_proc, "initialized", {})
             break
+    print("LSP server started.")
+    return lsp_proc
 
-    attach_symbols_recursive(fs_root, lsp_proc)
 
-    print_merged_tree(fs_root)
-
+def shutdown_lsp(lsp_proc: subprocess.Popen):
     shutdown_id = send_request(lsp_proc, "shutdown")
     while True:
         msg = read_message(lsp_proc)
@@ -402,5 +433,36 @@ def main():
     lsp_proc.terminate()
     lsp_proc.wait()
 
+
+def main():
+    if len(sys.argv) < 2:
+        return "Usage: python stree.py <start_directory> [--extras] [--gitignore]"
+
+    start_path = os.path.abspath(sys.argv[1])
+    use_extras = "--extras" in sys.argv
+    use_gitignore = "--gitignore" in sys.argv
+
+    lsp_proc = lsp_setup(start_path)
+
+    print(stree(start_path, lsp_proc, use_extras, use_gitignore))
+
+    shutdown_lsp(lsp_proc)
+
+
 if __name__ == "__main__":
-    main()
+    print(main())
+else:
+    start_path = __file__
+    lsp_proc = lsp_setup(start_path)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        lsp_proc = lsp_setup(start_path)
+        yield
+        shutdown_lsp(lsp_proc)
+
+    app = FastAPI(lifespan=lifespan)
+
+    @app.get("/stree")
+    def stree_endpoint(path: str, use_extras: bool = False, use_gitignore: bool = True):
+        return stree(path, lsp_proc, use_extras, use_gitignore)
