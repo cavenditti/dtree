@@ -5,12 +5,16 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi[standard]>=0.115.7",
-    "jedi-language-server>=0.43.1",
-    "pathspec>=0.12.1",
+  "fastapi[standard]>=0.115.7",
+  "jedi-language-server>=0.43.1",
+  "pathspec>=0.12.1",
 ]
 
+[tool.uv]
+package = true
+
 [dependency-groups]
-dev = [
-    "pytest>=8.3.4",
-]
+dev = ["pytest>=8.3.4"]
+
+[project.scripts]
+stree = "stree:main"
